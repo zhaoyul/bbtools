@@ -1,0 +1,244 @@
+#+TITLE: XRay (Your Code as a Crime Scene) 独立工具设计
+#+OPTIONS: toc:2 num:nil
+
+* 目标与边界
+
+** 目标
+- 输入一个 git 仓库.
+- 输出一个离线可打开的 HTML 可视化报告目录(Vega-Lite 图表), 同时落地同份结构化数据 =data.json= 供二次分析.
+- 覆盖 Your Code as a Crime Scene 的核心分析维度:
+  - churn / hotspots
+  - complexity
+  - ownership / knowledge map
+  - temporal coupling
+  - risk hotspots(将 churn x complexity x ownership 融合为" 优先级" )
+- 指标计算与报告渲染解耦: 渲染层只依赖稳定 schema 的数据, 不关心数据如何计算.
+
+** 非目标
+- 不做在线服务端(默认静态站点输出).
+- 不依赖外部网络(报告 assets 本地化).
+- 不把通知(钉钉/飞书/Slack)耦合进核心; 仅作为可选插件.
+
+* 用户体验(CLI)
+
+** 基本命令
+#+begin_src sh
+xray report --repo . --since 2025-01-01 --until 2026-02-08 --out ./xray-report
+#+end_src
+
+** 子命令
+- =xray report= 生成 HTML 报告目录 + =data.json= + =meta.json=
+- =xray export= 只生成 =data.json=(CI/二次分析)
+- =xray serve= (可选) 本地起静态服务预览报告
+
+** 通用参数(建议)
+- =--repo <path>= 默认当前目录
+- =--since YYYY-MM-DD=, =--until YYYY-MM-DD=
+- =--branch <name>= 或 =--all=(默认 =--all=)
+- =--no-merges= (默认 true)
+- =--path <subdir>= 只分析某子树
+- =--config <xray.edn>= 默认 repo 根目录 =xray.edn=
+- =--out <dir>= 输出目录
+- =--topN <n>= 报告默认 TopN(默认 30)
+- =--include-raw= 报告内包含精简版 raw commits(用于 HTML 内交互过滤, 默认 true)
+
+* 配置文件(EDN)
+
+文件: =xray.edn=
+- =:authors {:aliases {...}}=
+  - 将 author/email 的各种写法映射到同一名字
+- =:exclude {:paths [...], :globs [...], :commits #{...}}=
+  - 排除自动生成目录/二进制/大文件
+  - 其中 =:git-pathspecs= 可用于" git-time hard exclude" (直接传给 =git log= 的 pathspec exclude, 避免这些路径出现在 numstat 中)
+- =:classify {:doc-ext #{...} :code-ext #{...}}=
+- =:metrics {...}=
+  - coupling/hotspots/risk 等阈值, TopK, 权重
+- =:report {:title ... :theme ...}=
+
+** 示例
+#+begin_src clojure
+{:exclude
+ {:paths ["node_modules/" "target/" ".shadow-cljs/" ".clj-kondo/" "dist/"]
+  :globs ["**/*.min.js" "**/*.map" "**/*.png" "**/*.pdf"]
+  :commits #{"deadbeef"}}
+
+ :authors
+ {:aliases {"kevin li" "Kevin Li"
+            "KevinLi" "Kevin Li"
+            "kevin@example.com" "Kevin Li"
+            "google-labs-jules[bot]" "Bots"}}
+
+ :metrics {:coupling {:min-cochange 3 :topK 25 :topN 100}
+           :risk {:w-churn 0.45 :w-cc 0.35 :w-ownership 0.20}}
+
+ :report {:title "XRay Report"}}
+#+end_src
+
+* 报告输出(目录 + assets, 离线)
+
+** 为什么不用直接 fetch JSON
+浏览器在 =file://= 下通常限制 fetch 本地文件. 为保证" 直接双击打开" , 默认将数据写成 =assets/report-data.js= 形式:
+
+#+begin_src js
+window.XRAY_DATA = {...}
+#+end_src
+
+同时保留 =data.json= 作为机器可读输出.
+
+** 输出目录结构
+=--out ./xray-report= 生成:
+- =xray-report/index.html=
+- =xray-report/assets/vendor/vega.min.js=
+- =xray-report/assets/vendor/vega-lite.min.js=
+- =xray-report/assets/report.css=
+- =xray-report/assets/report-data.js=  (window.XRAY_DATA)
+- =xray-report/assets/report-spec.js=  (window.XRAY_SPEC_TEMPLATE)
+- =xray-report/assets/report.js=       (compile -> vega.View 渲染; 失败会显示错误而非白屏)
+- =xray-report/data.json=
+- =xray-report/meta.json=
+
+备注:
+- =index.html= 对 assets 引用会加版本 query(=...?v=...=)避免 =file://= 下缓存导致" 旧 JS + 新数据" 白屏.
+
+* 数据契约(schema versioned)
+
+数据 schema 是工具的" 公共 API" . 渲染层只依赖这份 schema, 不依赖内部实现.
+
+建议 =data.json= 顶层结构:
+- =schema_version= 例如 ="1.0"=
+- =repo= 例如 ={root, head, default_branch}=
+- =params= 例如 ={since, until, all, branch, path, no_merges, topN}=
+- =timeseries[]=:
+  - ={date, commits, files_changed, lines_added, lines_deleted, authors}=
+- =hotspots[]=:
+  - ={path, change_count, churn_lines, last_touched_at}=
+- =hotspots_dirs[]=:
+  - ={dir, file_count, change_count, churn_lines}=
+- =complexity_functions[]=:
+  - ={path, fn, cc, lang}=
+- =ownership_long[]= (长表, 便于做 heatmap/stacked bar):
+  - ={path, author, churn_lines, churn_pct, last_touched_at}=
+- =coupling_pairs[]=:
+  - ={a, b, co_change_count, support_pct}=
+- =coupling_pairs_long[]=:
+  - ={path, other, co_change_count, support_pct}=
+- =risk[]=:
+  - ={path, churn_score, cc_score, ownership_score, risk_score}=
+- =staleness[]=:
+  - ={path, age_days, last_touched_at, change_count, churn_lines}=
+- =knowledge_loss[]=:
+  - ={path, top_author, top1_pct, last_seen, loss_days, change_count, churn_lines}=
+- =ui_defaults=:
+  - ={risk: {w-churn,w-cc,w-ownership}, coupling: {min-cochange,topK,topN}}=
+- =raw= (当 =--include-raw= 为 true; 用于 HTML 里按时间段/作者交互过滤后重算指标):
+  - =commits[]=:
+    - ={sha, author, date_day, files: [{path, added, deleted}]}=
+  - =authors[]= 归一化后的 author 列表
+  - =min_day= / =max_day=
+
+约束:
+- =path= 统一 repo 相对路径, 统一分隔符 =/=
+- 时间: 日期用 =YYYY-MM-DD=, 时间戳用 RFC3339
+
+* 指标计算(Metric Pipeline)
+
+** Git 数据抽取(建议使用 numstat)
+不要用 =--stat= 文本猜测; 推荐使用可解析输出.
+
+命令形态(示意):
+#+begin_src sh
+git log --all --no-merges --date=iso-strict \
+  --pretty=format:'__XRAY_COMMIT__|%H|%an|%ae|%ad' \
+  --numstat
+#+end_src
+
+解析为事件流:
+- =Commit {sha, author, email, date, files: [{path, added, deleted}]}=
+
+** Churn / Hotspots
+- file change count: 文件在窗口内出现的 commit 次数
+- churn lines: 默认 =sum(added+deleted)= (也可配置为别的口径)
+
+** Ownership / Knowledge Map
+- 按文件聚合: author -> churn_lines
+- 指标:
+  - top1_pct(主贡献者占比)
+  - entropy(分散程度)
+  - "低集中度 + 高 churn"  = 风险
+
+** Temporal Coupling
+- 每个 commit 的文件集合做共现计数:  (a,b) -> co_change_count
+- =support_pct= 建议 =co_change_count / min(change_count[a], change_count[b])=
+- 规模控制: 只对 TopK hotspots 文件计算矩阵, 否则 O(n^2) 爆炸
+
+** Complexity(Clojure 起步)
+- 解析 =defn/defn-/defstate= 的函数体
+- 统计分支节点(=if/when/cond/case/when-let= ...)
+- 后续可扩展到其它语言(tree-sitter 等)
+
+** Risk Hotspots(优先级)
+- 目标: 把 churn, complexity, ownership 风险融合成一个排序
+- 示例:
+  - =risk_score = w1*normalize(churn) + w2*normalize(cc) + w3*normalize(ownership_risk)=
+- 权重与归一化方式可配置
+
+* 报告(Vega-Lite Dashboard)
+
+** 结构(叙事优先)
+- Overview: KPI + 风险 TopN
+- Churn: 时间序列(按天/周聚合)
+- Hotspots: 文件热点 bar + 目录 treemap
+- Complexity: 分布直方图 + Top 复杂函数表
+- Risk: scatter/bubble(X=cc, Y=churn, color=ownership_risk)
+- Ownership: heatmap/stacked bar
+- Coupling: heatmap + pairs table
+
+** 交互联动(尽量用 Vega-Lite params)
+- 外部 controls(HTML form):
+  - =since/until= 选择时间范围
+  - =author= 选择作者(或 All)
+  - =topN= 选择展示 TopN
+  - =selectedPath= 选择文件(或 All)
+  - 导出: 当前过滤后的 =JSON= / =CSV=
+- 图表内部用 Vega-Lite params(无 bind, 仅信号):
+  - =topN= / =selectedPath=
+- 当 =since/until/author= 变化时, 前端基于 =raw.commits= 重算
+
+** 图表交互(用户视角)
+- 每张图 =mouseover= 展示自定义 tooltip(字段名 i18n + 日期可读化)
+- 每张图点击进入全屏 modal
+- 支持局部区域 zoom/pan: vega-lite interval selection + =bind: "scales"=
+- 对支持 zoom 的图, 提供 =重置缩放= 按钮
+- 状态持久化: 使用 URL hash 保存 =lang/since/until/author/topN/selectedPath=
+  =timeseries/hotspots/ownership/coupling/risk= 并重新渲染(无需重新运行 CLI).
+
+* 架构与模块划分(独立工具代码组织)
+
+推荐用 babashka(便于分发, 启动快):
+- =xray.cli= 参数解析, 子命令分发
+- =xray.config= 配置加载与默认合并
+- =xray.git= git 调用与解析(唯一强耦合点)
+- =xray.metrics.*= 每个指标一个 ns
+- =xray.report.data= 组装 XRAY_DATA / data.json
+- =xray.report.html= 生成 index.html + assets + spec + data.js
+- =xray.vendor= 固定版本 vega/vega-lite/vega-embed(离线)
+
+插件(可选):
+- =xray.integrations.*= 通知推送(读取 meta/data, 不侵入 core)
+
+* 打包与分发
+- 可用 =bbin= 安装(内部或公开)
+- vendor JS 固定版本, 保证报告可复现
+
+* 质量与性能
+- 缓存(可选): =.xray/cache.edn= (按 time range + head sha 失效)
+- coupling: 只对 TopK 热点做矩阵
+- 测试:
+  - git 解析
+  - 指标聚合纯函数
+  - schema 校验
+  - 报告产物 smoke test(文件齐全)
+
+* 迁移注意点(来自现有仓库实践)
+- 旧实现常见问题: 用 =--stat= 文本解析, 硬编码 author alias, 输出形态与通知耦合.
+- 建议改用 =--numstat= 统一解析; alias 与 exclude 外置; 报告改为 HTML + JSON 双输出.
