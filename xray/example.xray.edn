@@ -1,0 +1,42 @@
+;; Example config for xray.
+;;
+;; Usage:
+;; - put this file at your repo root as xray.edn, or
+;; - pass it explicitly: bb -f tools/xray/bb.edn report --config ./path/to/xray.edn ...
+
+{:exclude
+ {:paths ["node_modules/"
+          "target/"
+          ".shadow-cljs/"
+          ".clj-kondo/"
+          ;; ignore generated outputs
+          "resources/public/"
+          "dist/"]
+  ;; Apply git-time exclusions too (prevents these paths from even appearing in `git log --numstat`).
+  :git-pathspecs [".clj-kondo/**" ".clj-kondo"]
+  ;; Java NIO PathMatcher globs (repo-relative paths, normalized to '/').
+  :globs ["**/*.min.js"
+          "**/*.map"
+          "**/*.png"
+          "**/*.jpg"
+          "**/*.svg"
+          "**/*.pdf"]
+  ;; Optional: exclude specific commits by sha prefix.
+  :commits #{"deadbeef"}}
+
+ ;; Normalize author identities. Keys can be author names or emails.
+ :authors
+ {:aliases {"kevin li" "Kevin Li"
+            "KevinLi" "Kevin Li"
+            "kevin@example.com" "Kevin Li"
+            "google-labs-jules[bot]" "Bots"}}
+
+ :metrics
+ {:coupling {:min-cochange 3
+             :topK 25
+             :topN 100}
+  :risk {:w-churn 0.45
+         :w-cc 0.35
+         :w-ownership 0.20}}
+
+ :report {:title "XRay Report"}}

@@ -1,0 +1,69 @@
+#+TITLE: XRay (Standalone) in This Repo
+#+OPTIONS: toc:2 num:nil
+
+* What This Is
+This folder contains a standalone bb-based tool that generates an offline Vega-Lite HTML report for a git repo.
+
+* Config (xray.edn)
+By default, xray will look for =xray.edn= in the repo root. You can also pass a config file explicitly:
+#+begin_src sh
+bb -f tools/xray/bb.edn report --repo . --config ./xray.edn --out ./target/xray-report
+#+end_src
+
+What you can configure:
+- Ignore files/dirs:
+  - ={:exclude {:paths [...], :globs [...], :git-pathspecs [...]}}=
+    - =:git-pathspecs= are passed to =git log= as =:(exclude,glob)...= for hard excludes
+- Author identity normalization:
+  - ={:authors {:aliases {\"alias\" \"Canonical Name\" ...}}}=
+    - alias keys may be either author names or emails
+
+Config is merged into defaults (lists are appended; sets are unioned).
+
+See:
+- =tools/xray/example.xray.edn=
+
+* Run (from repo root)
+#+begin_src sh
+cd /Users/kevinli/sandbox/rc/p-server
+bb -f tools/xray/bb.edn report --repo . --since 2025-01-01 --until 2026-02-08 --out ./target/xray-report
+#+end_src
+
+Open:
+- =/Users/kevinli/sandbox/rc/p-server/target/xray-report/index.html=
+
+Notes:
+- The HTML report supports interactive filtering by time range + author when raw commits are included (default).
+- You can disable raw commit embedding (smaller data.json) via =--include-raw false=, which disables interactive filtering.
+
+* Export Data Only
+#+begin_src sh
+bb -f tools/xray/bb.edn export --repo . --since 2025-01-01 --until 2026-02-08 --out ./target/xray-data.json
+#+end_src
+
+* Vendor Assets
+Offline assets are in:
+- =tools/xray/vendor/vega.min.js=
+- =tools/xray/vendor/vega-lite.min.js=
+
+* Install To PATH (bbin)
+This tool can be installed as a standalone command (=xray=) using =bbin=.
+
+Important: this repo's root =bb.edn= is not a valid babashka config, so run =bbin= from outside this repo (e.g. =/tmp=), or it will fail while trying to read the current directory's =bb.edn=.
+
+Install from local filesystem:
+#+begin_src sh
+cd /tmp
+bbin install /Users/kevinli/sandbox/rc/p-server/tools/xray
+#+end_src
+
+Check where bbin installs binaries:
+#+begin_src sh
+bbin bin
+#+end_src
+
+Then you can run:
+#+begin_src sh
+xray report --repo /path/to/repo --since 2025-01-01 --until 2026-02-08 --out ./xray-report
+xray export --repo /path/to/repo --since 2025-01-01 --until 2026-02-08 --out ./xray-data.json
+#+end_src

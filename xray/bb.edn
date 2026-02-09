@@ -1,0 +1,9 @@
+{:paths ["src"]
+ :bbin/bin
+ {xray {:main-opts ["-m" "xray.cli"]}}
+ :tasks
+ {:requires ([xray.cli :as cli])
+  report {:doc "Generate HTML report (offline) + data.json"
+          :task (apply cli/-main "report" *command-line-args*)}
+  export {:doc "Export data.json only"
+          :task (apply cli/-main "export" *command-line-args*)}}}
